@@ -1,0 +1,30 @@
+#! /usr/bin/perl
+
+# 1) Guess binomial scientific names by reading database filenames
+# 2) Query entrez to get taxon ids for these scientific names
+
+use strict;
+use warnings;
+use File::Basename;
+
+my $fh = \*STDIN;
+
+my $DELIMITER = ";";
+$DELIMITER = shift if scalar @ARGV > 0;
+
+while(<$fh>){
+    chomp $_;
+    my $db_name = basename($_);
+    if($db_name =~ m/^(.*?)\./ix){
+        my $name = $1;
+        $name =~ s/_var_/_var._/g;
+        $name =~ s/_sp_/_sp._/g;
+        $name =~ s/_subsp_/_subsp._/g;
+        $name =~ s/_cv_/_cv._/g;
+        $name =~ s/_+/ /g;
+        print $db_name . $DELIMITER . $name . "\n";
+        next;
+    }
+    print $db_name . $DELIMITER . "NOT IDENTIFIABLE" . "\n";
+
+}

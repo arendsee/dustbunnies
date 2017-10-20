@@ -1,0 +1,215 @@
+#! /usr/bin/perl
+
+=head1 NAME
+
+b<gbk2csv> - convert (with loss) from genbank to csv
+
+=head1 DESCRIPTION
+
+The values of most tags are written to the file. 
+
+=head1 OPTIONS
+
+B<--header> (default=T)
+
+Write the header for the csv
+
+B<--no-header> (default=F)
+
+Do not write the header. This option should be enabled if you wish
+to append an existing file.
+
+=cut
+
+use strict;
+use warnings;
+use Bio::SeqIO;
+use Getopt::Long;
+
+my $opt_header = 1;
+
+my @columns = ('locus_tag');
+Getopt::Long::Configure ('bundling');
+my $result = GetOptions(
+    'h|header'    => sub {$opt_header = 1},
+    'H|no-header' => sub {$opt_header = 0},
+
+    'gene'          => sub {push @columns, 'gene'},
+    'primary_tag'   => sub {push @columns, 'primary_tag'},
+    'gi'            => sub {push @columns, 'gi'},
+    'GeneID'        => sub {push @columns, 'GeneID'},
+    'pseudo'        => sub {push @columns, 'pseudo'},
+    'taxon'         => sub {push @columns, 'taxon'},
+    'organism'      => sub {push @columns, 'organism'},
+    'chromosome'    => sub {push @columns, 'chromosome'},
+    'mol_type'      => sub {push @columns, 'mol_type'},
+    'ecotype'       => sub {push @columns, 'ecotype'},
+    'protein_id'    => sub {push @columns, 'protein_id'},
+    'transcript_id' => sub {push @columns, 'transcript_id'},
+    'ncRNA_class'   => sub {push @columns, 'ncRNA_class'},
+    'codon_start'   => sub {push @columns, 'codon_start'},
+    'gene_synonym'  => sub {push @columns, 'gene_synonym'},
+    'product'       => sub {push @columns, 'product'},
+    'location'      => sub {push @columns, 'location'},
+    'function'      => sub {push @columns, 'function'},
+    'inference'     => sub {push @columns, 'inference'},
+    'exception'     => sub {push @columns, 'exception'},
+    'note'          => sub {push @columns, 'note'},
+    'citation'      => sub {push @columns, 'citation'},
+);
+die "Failed to parse command line options\n" unless $result;
+
+if($opt_header){
+    print join("\t", @columns), "\n";
+}
+
+my $fh = \*STDIN;
+my $in = Bio::SeqIO -> new(-fh => $fh, -format => 'genbank');
+
+my @lines;
+while(my $seq_obj = $in->next_seq()){
+    # For each Bio::SeqFeature::Generic object
+    my %prime_hash;
+    foreach my $feat ($seq_obj->get_SeqFeatures()){
+        my $primary_tag = $feat->primary_tag();
+        next if $primary_tag eq 'gap';
+        next if $primary_tag eq 'STS';
+        if($primary_tag eq 'source'){
+            &set_source(\%prime_hash, $feat);
+        } else {
+            &fill_prime_hash(\%prime_hash, $feat);
+            &print_line(\%prime_hash, \@columns);
+        }
+    }
+}
+
+sub set_source {
+    my ($hash_ref, $feat) = @_;
+    $hash_ref->{'taxon'} = &get_db_xref($feat, 'taxon');
+    my %other_four = map { $_ => &get_simple_tag($feat, $_) }
+                            ('organism', 'chromosome', 'mol_type', 'ecotype');
+    while( my($key, $value) = each(%other_four) ){
+        $hash_ref->{$key} = $value;
+    }
+}
+
+sub fill_prime_hash {
+    my ($hash_ref, $feat) = @_;
+    $hash_ref->{'primary_tag'} = $feat->primary_tag();
+    $hash_ref->{'gi'} = &get_db_xref($feat, "GI");
+    $hash_ref->{'GeneID'} = &get_db_xref($feat, "GeneID");
+    $hash_ref->{'location'} = $feat->location()->to_FTstring();
+    if($feat->has_tag('pseudo')){
+        $hash_ref->{'pseudo'} = 'TRUE';
+    } else {
+        $hash_ref->{'pseudo'} = 'FALSE';
+    }
+    my %simple_tags = map { $_ => &get_simple_tag($feat, $_) }
+        ('locus_tag', 'gene', 'product', 'protein_id', 'transcript_id', 
+         'ncRNA_class', 'codon_start', 'function', 'inference', 'exception',
+         'gene_synonym', 'note', 'citation'); 
+    while( my($key, $value) = each(%simple_tags) ){
+        $hash_ref->{$key} = $value;
+    }
+}
+
+sub print_line {
+    my ($hash_ref, $columns_ref) = @_;
+    my $out = "";
+
+    foreach my $element (@$columns_ref) {
+        $out .= $hash_ref->{$element} . "\t";
+    }
+    $out =~ s/\t$/\n/;
+    print $out;
+}
+
+sub get_simple_tag {
+    my ($feat, $tag) = @_;
+    if($feat->has_tag($tag)){
+        return ($feat->get_tag_values($tag))[0];
+    } else {
+        return "NA";
+    }
+}
+
+sub get_db_xref {
+    my ($feat, $type) = @_;
+    if($feat->has_tag('db_xref')){
+        foreach my $ref ($feat->get_tag_values('db_xref')){
+            if($ref =~ m/(\S+?):(\S+)/){
+                return $2 if $1 eq $type;
+            }
+        }
+    }
+    return "NA";
+}
+
+=head1 APPENDIX
+
+The following tags are present in At (left justified terms are primary 
+tags):
+
+source
+	mol_type
+	db_xref
+	chromosome
+	ecotype
+	organism
+mRNA
+	locus_tag
+	db_xref
+	gene_synonym
+	inference
+	gene
+	product
+	transcript_id
+misc_feature
+	locus_tag
+	gene_synonym
+	pseudo
+	gene
+	note
+gene
+	locus_tag
+	db_xref
+	gene_synonym
+	pseudo
+	function
+	gene
+STS
+	locus_tag
+	db_xref
+	gene_synonym
+	gene
+	standard_name
+CDS
+	locus_tag
+	gene_synonym
+	protein_id
+	gene
+	note
+	db_xref
+	codon_start
+	inference
+	exception
+	product
+	translation
+	citation
+gap
+	estimated_length
+ncRNA
+	ncRNA_class
+	locus_tag
+	db_xref
+	gene_synonym
+	gene
+	product
+	note
+tRNA
+	locus_tag
+	db_xref
+	gene_synonym
+	product
+	note
+=cut

@@ -1,0 +1,12 @@
+#! /usr/bin/perl
+
+my $fh = \*STDIN;
+
+while(<$fh>){
+    if(/^locus_tag/){
+        print $_;
+    }
+    elsif(m/(\S+\t\S+\t\d+\t).*(Has\s\d+\sBlast.*)/x){
+        print $1 . $2 . "\n";
+    }
+}

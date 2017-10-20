@@ -1,0 +1,149 @@
+#! /usr/bin/perl
+
+=head1
+
+Pipe. Accepts an XML file from STDIN, writes a summary to STDOUT
+
+=cut
+
+use strict;
+use warnings;
+use Getopt::Long;
+
+my $xml_fh = \*STDIN;
+my %out;
+
+use vars qw{ $delimiter $by };
+my $result = GetOptions (
+    'd|delimiter=s' => \$delimiter,
+    'e|by-evalue'   => sub { $by = 'evalue'},
+    's|by-score'    => sub { $by = 'bitscore' },
+    'i|by-identity' => sub { $by = 'identity' },
+    'c|by-coverage' => sub { $by = 'coverage' } # Not yet implemented
+);
+die "Cannot parse arguments\n" unless $result;
+$delimiter = ';' unless $delimiter;
+$by = 'bitscore' unless $by;
+
+&read_xml();
+&print_matrix();
+
+# This function collects a lot of information that is not used
+# For example, it will find the database length and the search statistics.
+sub read_xml {
+    use vars qw{ $query $query_length $evalue $bitscore $identity $align_len 
+                 $db_len $kappa $lambda $entropy};
+    my $subject = "UNINITIALIZED";
+    my $is_first = 1;
+
+    my $blastoutput_ex = qr/<BlastOutput_db>(.*?)<\/BlastOutput_db>/;
+    my $iteration_ex = qr/^\s*<Iteration>\s*$/;
+    my $query_ex = qr/<Iteration_query-def>(.*)<\/Iteration_query-def>/;
+    my $evalue_ex = qr/<Hsp_evalue>(\S+?)<\/Hsp_evalue>/;
+    my $bitscore_ex = qr/<Hsp_bit-score>(\S+?)<\/Hsp_bit-score>/;
+    my $identity_ex = qr/<Hsp_identity>(\d+)<\/Hsp_identity>/;
+    my $align_len_ex = qr/<Hsp_align-len>(\d+)<\/Hsp_align-len>/;
+    my $hsp_end_ex = qr/^\s*<\/Hsp>\s*$/;
+    my $db_len_ex = qr/<Statistics_db-len>(\d+)<\/Statistics_db-len>/;
+    my $kappa_ex = qr/<Statistics_kappa>([0-9.-]+)<\/Statistics_kappa>/;
+    my $lambda_ex = qr/<Statistics_lambda>([0-9.-]+)<\/Statistics_lambda>/;
+    my $iteration_end_ex = qr/^\s*<\/Iteration>\s*/;
+    
+    while(<$xml_fh>){
+        if(/$blastoutput_ex/){
+            $subject = &parse_db_name($1);
+        }
+        # Beginning of new iteration
+        elsif(/$iteration_ex/){
+            $query    = "";
+            $evalue   = 999; # Default e-value
+            $bitscore = 0;
+            $identity = 0;
+            $align_len  = 1; # Default to 1 to avoid division by 0
+            $is_first = 1;
+        }
+
+        # Begin reading a new query record
+        elsif(/$query_ex/){
+            $query = $1;
+        }
+
+        # Get the hit e-value if is the first hit
+        elsif(/$evalue_ex/ and $is_first){
+            $evalue = $1;
+        }
+
+        # Get the hit bit-score if is the first hit
+        elsif(/$bitscore_ex/ and $is_first){
+            $bitscore = $1;
+        }
+
+        elsif(/$identity_ex/ and $is_first){
+            $identity = $1;
+        }
+
+        elsif(/$align_len_ex/ and $is_first){
+            $align_len = $1;
+        }
+
+        # End of first hit of this query to this database
+        elsif(/$hsp_end_ex/){
+            $is_first = 0; 
+        }
+
+        elsif(/$db_len_ex/){
+            $db_len = $1;
+        }
+
+        elsif(/$kappa_ex/){
+            $kappa = $1;
+        }
+
+        elsif(/$lambda_ex/){
+            $lambda = $1;
+        }
+
+        # End of this record
+        elsif(/$iteration_end_ex/){
+            # To avoid ghostly anomolies beyond my understanding
+            # See `./cladespec -i AT1G64360 -t protein -s Arabidopsis_thaliana`
+            next unless $query;
+
+            # Percent identity
+            my $pi = $identity / $align_len;
+
+            $out{$query}->{$subject} = $bitscore if $by eq 'bitscore';
+            $out{$query}->{$subject} = $evalue   if $by eq 'evalue';
+            $out{$query}->{$subject} = $pi       if $by eq 'identity';
+        }
+    }
+}
+
+sub parse_db_name {
+    my $name = shift;
+    if($name =~ m/([^\/]+)$/g){
+       return $1;
+    }
+}
+
+sub print_matrix {
+    my $is_first = 1;
+    foreach my $query (sort keys %out){
+        if($is_first){
+            my $header = "";
+            $header .= $delimiter;
+            $header .= $_ . $delimiter foreach (sort keys %{$out{$query}});
+            $header =~ s/$delimiter$//;
+            print $header . "\n";
+            $is_first = 0;
+        }
+        my $line = "";
+        $line .= $query . $delimiter;
+        foreach my $id (sort keys %{$out{$query}}){
+            my $evalue = $out{$query}->{$id};
+            $line .= $evalue . $delimiter;
+        }
+        $line =~ s/$delimiter$//;
+        print $line . "\n";
+    }
+}

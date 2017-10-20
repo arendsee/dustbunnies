@@ -1,0 +1,100 @@
+-------------------------------------------------------------------------------
+-- Find weird results where alignment length is greater than query or hit
+-- length
+-------------------------------------------------------------------------------
+-- select
+--     query_gb,
+--     hsp_query_from,
+--     hsp_query_to,
+--     hsp_hit_from,
+--     hsp_hit_to,
+--     hsp_gaps,
+--     hsp_bit_score
+-- from
+--     blastreport
+-- where
+--     hit_num = 1
+--     and
+--     query_gb in
+--     (
+--         select qgb
+--         from besthits
+--         where
+--             alen > qlen
+--             and
+--             alen > hlen
+--             and
+--             database like "Maca%" limit 10
+--     );
+
+
+-------------------------------------------------------------------------------
+-- get hsp counts
+-------------------------------------------------------------------------------
+-- select 
+--     distinct(nhsp) as hsp,
+--     count(nhsp)
+-- from
+--     besthits
+-- where
+--     database like 'Maca%' group by hsp;
+
+
+-------------------------------------------------------------------------------
+-- get maximal summed score hsps and associated summed data
+-------------------------------------------------------------------------------
+-- insert or replace into besthits
+-- select
+--     blastoutput_db as database,
+--     collection as collection,
+-- 
+--     query_gene as qgene,
+--     query_gb as qgb,
+--     query_gi as qgi,
+--     query_locus as qlocus,
+--     query_taxon as qtaxon,
+--     Iteration_query_len as qlen,
+-- 
+--     hit_len as hlen,
+--     hit_id as hid,
+--     hit_def as hdef,
+--     hit_accession as hacc,
+-- 
+--     nhsp,
+-- 
+--     alen,
+--     gaps,
+--     identity,
+--     positive,
+--     max(score) as score
+-- from (
+--     select
+--         *,
+--         sum(hsp_align_len) as alen,
+--         sum(hsp_gaps) as gaps,
+--         sum(hsp_identity) as identity,
+--         sum(hsp_positive) as positive,
+--         sum(hsp_bit_score) as score,
+--         count(hsp_num) as nhsp
+--     from blastreport
+--     group by query_gb, blastoutput_db, hit_num
+--     )
+-- group by database, qgene;
+
+
+-------------------------------------------------------------------------------
+-- get info needed to identify besthits
+-------------------------------------------------------------------------------
+-- select
+--     blastoutput_db, -- database
+--     query_gb,       -- unique identifier for query seq
+--     hit_num,
+--     hsp_num,
+--     hsp_query_from,
+--     hsp_query_to,
+--     hsp_hit_from,
+--     hsp_hit_to,
+--     hsp_gaps,
+--     hsp_bit_score
+-- from
+--     blastreport

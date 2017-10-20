@@ -1,0 +1,215 @@
+#! /usr/bin/perl
+
+=head1 NAME
+
+B<fastatype.pl> - Predicts a fasta input sequence type
+
+=head1 SYNOPSIS
+
+fastatype.pl [options]
+
+=head1 OPTIONS
+
+=over 2
+
+=item B<-v, --verbose>
+
+Write detailed output
+
+=back
+
+=head1 EXAMPLE
+
+ $ cat my_fasta_file.faa | fastatype.pl --verbose
+ Sequences:                    35176
+ Short sequences (<20):        0
+ Certain DNA seqs:             0
+ Likely DNA seqs:              0
+ Certain RNA seqs:             0
+ Likely RNA seqs:              0
+ Certain aa seqs:              35170
+ Likely aa seqs:               6
+ Gaps:                         0
+ Stars:                        0
+ Odd characters [BJOZ]:        0
+ Non-letter containing seqs:   0
+
+ $ cat my_fasta_file.faa | fastatype.pl
+ protein
+
+=cut
+
+use strict;
+use warnings;
+use Getopt::Long;
+
+###### DECLARTIONS #######################################################
+
+# DNA characters (with N as unknown)
+my %dna_char = map { $_ => 1 } split ('', 'ACGTN');
+
+# RNA characters (with N as unknown)
+my %rna_char = map { $_ => 1 } split ('', 'ACGUN');
+
+# Amino acids (with X as unknown)
+my %pro_char = map { $_ => 1 } split ('', 'ACDEFGHIKLMNPQRSTVWXY');
+
+# Bad characters that might have valid meaning
+my %bad_char = map { $_ => 1 } split ('', 'BJOZ');
+
+# Number of sequences that appear to be dna, rna, and protein
+my ($dna_seqs, $rna_seqs, $pro_seqs)                      = (0,0,0);
+
+# Number of sequences that are very likely dna, rna, or protein
+my ($likely_dna_seqs, $likely_rna_seqs, $likely_pro_seqs) = (0,0,0);
+
+# Number of 'bad' characters, i.e. 'B', 'J', 'O', or 'Z'
+my $bad = 0;
+
+# Number of sequences with a non-letter character
+my $catastrophic_seqs = 0;
+
+# Number of very short sequences (less than 5 characters of apparent protein
+# or less than 20 of apparent DNA or RNA)
+my $dubious_seqs = 0;
+
+# Total number of sequences
+my $seq_count = 0;
+
+# Number of gaps in the sequence (underscores)
+my $gaps = 0;
+
+# Number of stars in the sequnce (may indicate stop codons)
+my $stars = 0;
+
+##########################################################################
+
+# Input from the pipeline
+my $fh = \*STDIN;
+
+my $verbose = 0;
+Getopt::Long::Configure ('bundling');
+my $result = GetOptions( 'v|verbose' => \$verbose);
+
+
+# Main loop, reads each line of sequence (skipping headers), when reaches
+# end of a sequence, guess type (call 'guess' subroutine) 
+my ($dna_c, $rna_c, $pro_c, $line_length) = (0,0,0,0);
+while(<$fh>){
+
+    # Eventually I would like to distinguish between upper and lowercase
+    # letters (to recognize masking).
+    my $line =  uc $_; 
+    chomp $line;
+
+    # Ignore commented lines (do not allow comments after sequence)
+    next if $line =~ m/^\s*#/;
+
+    # If is header
+    if ( $line =~ m/^\s*>/ ){
+        $seq_count++;
+        if( ($dna_c + $rna_c + $pro_c) > 0 ){
+            &guess($dna_c, $rna_c, $pro_c, $line_length);
+            ($dna_c, $rna_c, $pro_c, $line_length) = (0,0,0,0);    
+        }
+        next;
+    }
+
+    $line_length += length $line;
+
+    my @chars = split("", $line);
+    my $is_catastrophic = 0;
+    foreach my $char (@chars){
+        if(exists $dna_char{$char}){
+            $dna_c++;
+        } 
+        if (exists $pro_char{$char}) {
+            $pro_c++; 
+        }
+        if (exists $rna_char{$char}) {
+            $rna_c++;
+        }
+        if ($char eq '_') {
+            $gaps++;
+            $line_length--;
+        }
+        if ($char eq '*') {
+            $stars++;
+            $line_length--;
+        }
+        if (exists $bad_char{$char}) {
+            $bad++;
+        }
+        if ( $is_catastrophic ) {
+            $catastrophic_seqs++; 
+            $is_catastrophic = 1;
+            last;
+        }
+    }
+}
+# Process last sequence
+&guess($dna_c, $rna_c, $pro_c, $line_length);
+
+sub guess {
+    my ($dna_c, $rna_c, $pro_c, $seq_length) = @_;
+    # If the sequence is at least 20 characters in length:
+    #   if all character is in type (dna, rna, prot), is type
+    #   if most characters is in type, likely is type
+    if ( $seq_length > 20 ) {
+        if ( $seq_length == $dna_c ) { $dna_seqs++ }
+        elsif ( $dna_c / $seq_length > 0.9 ) { $likely_dna_seqs++ }
+
+        elsif ( $seq_length == $rna_c ) { $rna_seqs++ }
+        elsif ( $rna_c / $seq_length > 0.9 ) { $likely_rna_seqs++ }
+        
+        elsif ( $seq_length == $pro_c ) { $pro_seqs++ }
+        elsif ( $pro_c / $seq_length > 0.95 ) { $likely_pro_seqs++ }
+    } 
+    # If sequence is between 5 and 19 characters long, and if sequence
+    # contains characters that are not in the dna or rna set, then assign
+    # the sequence to likely protein
+    elsif ( $seq_length > 4 and 
+            $dna_c < $seq_length and $rna_c < $seq_length ) {
+       $likely_pro_seqs++; 
+    }
+    # If the sequence is less than 5 characters long or less than 20 and
+    # comprised of nucleotides, assign a dubious value
+    else {
+        $dubious_seqs++;
+    }
+}
+
+my $good_lines = $seq_count - $dubious_seqs;
+
+my $quiet_output = "";
+my $verbose_output = 
+    sprintf("%-30s%d\n", 'Sequences:'                  , $seq_count)       .
+    sprintf("%-30s%d\n", 'Short sequences (<20):'      , $dubious_seqs)    .
+    sprintf("%-30s%d\n", 'Certain DNA seqs:'           , $dna_seqs)        .
+    sprintf("%-30s%d\n", 'Likely DNA seqs:'            , $likely_dna_seqs) .
+    sprintf("%-30s%d\n", 'Certain RNA seqs:'           , $rna_seqs)        .
+    sprintf("%-30s%d\n", 'Likely RNA seqs:'            , $likely_rna_seqs) .
+    sprintf("%-30s%d\n", 'Certain aa seqs:'            , $pro_seqs)        .
+    sprintf("%-30s%d\n", 'Likely aa seqs:'             , $likely_pro_seqs) .
+    sprintf("%-30s%d\n", 'gaps:'                       , $gaps)            .
+    sprintf("%-30s%d\n", 'stars:'                      , $stars)           .
+    sprintf("%-30s%d\n", 'Odd characters [BJOZ]:'      , $bad)             .
+    sprintf("%-30s%d\n", 'Non-letter containing seqs:' , $catastrophic_seqs);
+
+if( $dna_seqs + $likely_dna_seqs == $good_lines ) {
+    $quiet_output = "DNA\n";
+}
+elsif( $rna_seqs + $likely_rna_seqs == $good_lines ) {
+    $quiet_output = "RNA\n";
+}
+# There may be long sequences in a protein that (such as GT repeats) that
+# look like DNA
+elsif( $pro_seqs + $likely_pro_seqs == $good_lines) {
+    $quiet_output = "protein\n";
+}
+else {
+    $quiet_output = "uncertain\n";
+}
+
+print $quiet_output if not $verbose;
+print $verbose_output if $verbose;

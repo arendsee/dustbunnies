@@ -1,0 +1,59 @@
+#! /usr/bin/perl
+
+use strict;
+use warnings;
+use Getopt::Long;
+
+use vars qw($code $del $type);
+Getopt::Long::Configure ('bundling');
+GetOptions( 
+    't|type=s' => \$type,
+    'l|deli=s' => \$del );
+$code = \&process_dna if $type =~ m/dna/i;
+$code = \&process_protein if $type =~ m/pro/i;
+die "Please provide type\n" unless $code;
+$del = ';' unless $del;
+
+my $fh = \*STDIN;
+
+my %seq;
+my $header = "";
+while(<$fh>){
+    next if /^\s*#/;
+    chomp $_;
+    if(/^>(.*)/) {
+        $header = $1;
+        $seq{$header} = "";
+        next;
+    }
+    $seq{$header} .= $_; 
+}
+
+$code->(\%seq);
+
+sub process_dna {
+    my $seq_ref = shift;
+    my $alphabet = 'ACGT';
+    &count($seq_ref, $alphabet);
+}
+
+sub process_protein {
+    my $seq_ref = shift;
+    my $alphabet = 'ACDEFGHIKLMNPQRSTVWY';
+    &count($seq_ref, $alphabet);
+}
+
+sub count {
+    my ($seq_ref, $alphabet) = @_;
+    my @chars = split("", $alphabet);
+    print join( $del, ("", 'length', sort @chars) ), "\n";
+
+    while ( my($header, $seq) = each %$seq_ref ){
+        my $length = length $seq;
+        my %char_count = map {$_ => 0} (@chars);
+        my @seq_chars = split("", $seq);
+        $char_count{$_}++ foreach (@seq_chars);
+        my @counts = map( $char_count{$_}, sort @chars );
+        print join($del, ($header, $length, @counts) ), "\n";
+    }
+}

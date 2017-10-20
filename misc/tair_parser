@@ -1,0 +1,67 @@
+#!/usr/bin/perl
+
+=head1 DESCRIPTION
+
+Reads a list of descriptions from TAIR. The desciptions are very poorly 
+formatted, little consistent order. There is one line for each locus. Each of these lines contains a string with the following format:
+ 
+Has 285 Blast hits to 285 proteins in 23 species: Archae - 0; Bacteria - 0; Metazoa - 1; Fungi - 0; Plants - 279; Viruses - 0; Other Eukaryotes - 5
+
+This script reads this pattern and extracts the useful numbers. These are
+written to a csv file named 'tair_coding.txt'. Ignored lines are written to 
+a file aptly named 'tair_ignored_loci.txt' and lines that do not begin with
+a locus identifier are written to the 'tair.log' file. This last file should
+be only a few lines.
+
+=cut
+
+use strict;
+use warnings;
+
+my $fh = \*STDIN;
+
+my @mainout;
+my $header = ",Hits,Protein_hits,Species,Archae,Bacteria,Metazoa," .
+             "Fungi,Plants,Viruses,Other_Eukaryotes";
+push(@mainout, $header);
+open IGNORED, ">tair_ignored_loci.txt";
+open LOG, ">tair.log";
+while(<$fh>){
+    my $line = $_;
+    my $is_good = 0;
+    if($line =~ m/^\s*(AT\dG\d+)/){
+        my @elements;
+        push(@elements, $1);
+        if($line =~ m/Has\s+(\d+)\s+Blast\s+hits/g){
+            # Write the locus tag as the first element in each line
+            push(@elements, $1);
+
+            $is_good = 1;
+            
+            if($line =~ m/to\s+(\d+)\s+proteins\s+in\s+(\d+)\s+species:/xg){
+                push(@elements, ($1,$2));
+            } else { $is_good = 0 }
+
+            if($line =~ m/Archae\s+-\s+(\d+);\s+Bacteria\s+-\s+(\d+);\s+
+                          Metazoa\s+-\s+(\d+);\s+Fungi\s+-\s+(\d+);\s+
+                          Plants\s+-\s+(\d+);\s+Viruses\s+-\s+(\d+);\s+
+                          Other\s+Eukaryotes\s+-\s+(\d+)/xg){
+                push(@elements, ($1,$2,$3,$4,$5,$6,$7));
+            } else { $is_good = 0 }
+
+            push(@mainout, join(",", @elements)) if $is_good;
+        }
+        else{
+            print IGNORED "$_" unless $is_good;
+        }
+    }
+    else {
+        print LOG $_;
+    }
+}
+close IGNORED;
+close LOG;
+
+open OUT, ">tair_coding.csv";
+print OUT "$_\n" foreach (@mainout);
+close OUT;

@@ -1,0 +1,65 @@
+#! /usr/bin/perl
+
+#######################################################################
+#
+# Cleans a commented tabular (outfmt 7) blastreport and add database 
+# column
+#
+# 1) Creates a header from the '# Fields: ...' comment line
+# 2) Checks to ensure fields are identical between all entries
+# 3) Identifies the database fomr th '# Database : ...' comment line
+# 4) Adds a database column (first column) and query column (second column)
+# 5) For query blasts against databases that result in no hits, create a
+#    line of NA's
+# 6) Removes all comments
+#
+# NOTE: Avoid putting qseqid in the outfmt option line, if you do this,
+# that column will end up being duplicated. It won't cause any problems,
+# but it will be messy, confusing the the downstream users, and will
+# waste memory.
+#
+#######################################################################
+
+use strict;
+use warnings;
+
+my $fh = \*STDIN;
+
+my $del = "\t";
+my $database = "";
+my $header = "";
+my $query = "";
+while(<$fh>){
+    if(/^\s*#\s+Database:\s+(.*\Z)/){
+        ($database = $1) =~ s/.*\///;
+    } 
+    elsif(/^\s*#\s+Fields:\s+(.*\Z)/){
+        my $fields = $1;
+        $fields =~ s/,\s/,/g;
+        $fields =~ s/\s/_/g;
+        $fields = join($del, split(",", $fields));
+        if(not $header){
+            $header = $fields;
+            print "database" . $del . "query" . $del . "$header\n";
+        }
+        # Check to ensure fields match
+        die "Unmatched fields\n" if not $fields eq $header;
+    }
+    elsif(/^\s*#\s+Query:\s+(.*\Z)/){
+        $query = $1;
+    }
+    # If no hist are found to a particular database, write the database
+    # and query (as two columns) followed by a line of NA's
+    elsif(/^\s*#\s+0\s+hits\s+found/){
+        # If no positive match preceded the database without matches, the
+        # script does not know how many fields it should write.
+        my $odd_error_message = "An odd error occured, change the order " . 
+            "of your input sequences and maybe it will go away\n";
+        die $odd_error_message if not $header;
+        (my $na_line = $header) =~ s/[^\Q$del\E]+/NA/g;
+        print join($del, ($database, $query, $na_line)), "\n";
+    }
+    elsif(not /^\s*#/){
+        print $database . $del . $query . $del . $_;
+    }
+}

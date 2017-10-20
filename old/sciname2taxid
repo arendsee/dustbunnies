@@ -1,0 +1,146 @@
+#! /usr/bin/perl
+
+use strict;
+use warnings;
+use LWP::Simple;
+
+my $DELIMITER = ';';
+
+##### GET TAXIDS
+
+my (@in, @out);
+my $scinames = &read_scinames();
+my $out1 = &get_taxids($scinames);  # XML file containing taxonid info
+my $taxids = &parse_sciname_search($out1);     # one line comma delimited
+my $xml = &query_entrez($taxids);
+&print_out(\$xml);
+
+sub read_scinames {
+    my %names;
+    my $fh = \*STDIN;
+    my $regex = qr/.*$DELIMITER([^$DELIMITER]*?)$/;
+    while(<$fh>){
+        if(/$regex/i){
+            my $query_term = $1;
+            $query_term =~ s/\s+/+/g;
+            $names{$query_term} = 1;
+        }
+        my $inline = $_;
+        chomp $inline;
+        push(@in, $inline);
+    }
+
+    my $term = join('+OR+', sort keys %names);
+    return $term;
+}
+
+sub get_taxids {
+    my $scinames = shift;
+    my $base = 'http://eutils.ncbi.nlm.nih.gov/entrez/eutils/';
+    my $tool = 'esearch.fcgi';
+    my $URL = $base . $tool . "?db=taxonomy" . "&term=" . $scinames .
+              "&retmax=1000";
+    return get($URL);
+}
+
+sub parse_sciname_search {
+    my $xml = shift;
+    my $taxids = "";
+    while($xml =~ m/<Id>(\d+)<\/Id>/g){
+        $taxids .= "$1,";
+    }
+    $taxids =~ s/,$//;
+    return $taxids;
+}
+
+
+
+sub get_input {
+    my $fh = \*STDIN;
+    while(<$fh>){
+        return $1 if /(\S+)/;
+    }
+}
+
+sub query_entrez {
+    my $taxids = shift;
+    my $base = 'http://eutils.ncbi.nlm.nih.gov/entrez/eutils/';
+    my $tool = 'efetch.fcgi';
+    my $URL = $base . $tool . "?db=taxonomy&id=$taxids";
+    sleep 1; # To be courteous
+    return get($URL);
+}
+
+sub print_out {
+    my $xml_ref = shift;
+    my @xml = split("\n", $$xml_ref);
+    my (%results, @names, $taxid);
+    my $is_new = 1;
+    foreach my $line (@xml){
+        # Begin reading a new taxon
+        if($line =~ /^<Taxon>/ or $line =~ /^<TaxaSet><Taxon>/){
+            $is_new = 1;
+        }
+
+        # Get taxon id
+        elsif($line =~ /<TaxId>(\d+)<\/TaxId>/ and $is_new){
+            $taxid = $1;
+        }
+
+        # Get scientific name
+        elsif($line =~ /<ScientificName>(.*)<\/ScientificName>/ and $is_new){
+            @names = ();
+            push(@names, $1);
+        }
+
+        # Get any synonymous names
+        elsif($line =~ /<Synonym>(.*)<\/Synonym>/ and $is_new){
+            push(@names, $1);
+        }
+
+        # Get any included names
+        elsif($line =~ /<Includes>(.*)<\/Includes>/ and $is_new){
+            push(@names, $1);
+        }
+
+        # Stop reading taxon (no more interesting information)
+        elsif($line =~ /<Lineage>/ and $is_new){
+            $is_new = 0;
+            &add_line(\@names, $taxid);
+        }
+    }
+
+    &final_print();
+}
+
+sub add_line {
+    my ($names_ref, $taxid) = @_;
+    foreach my $line (@in){
+        foreach my $name (@$names_ref){
+            if($line =~ m/$DELIMITER(.*)/){
+                if($1 eq $name){
+                    my $newline = $line . $DELIMITER . $taxid;
+                    push(@out, $newline);
+                }
+            }
+        }
+    }
+}
+
+sub final_print {
+    foreach my $in_line (@in) {
+        my $has = 0;
+        foreach my $out_line (@out) {
+            if($out_line =~ m/$in_line/){
+                $has = 1;
+            }
+        }
+
+        if(not $has){
+            my $newline = $in_line . $DELIMITER . "UNKNOWN TAXID";
+            push(@out, $newline);
+        }
+    }
+    print "database" . $DELIMITER . "species" . $DELIMITER . "taxid\n";
+    print "$_\n" foreach (sort @out);
+}

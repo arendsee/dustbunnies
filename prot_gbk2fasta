@@ -1,0 +1,56 @@
+#! /usr/bin/perl
+
+use strict;
+use warnings;
+
+my $fh = \*STDIN;
+
+my $patterns =
+{
+    'locus'   => qr/^LOCUS\s+(\S+)\s+\S+/,
+    'length'  => qr/^LOCUS\s+\S+\s+(\S+)/,
+    'source'  => qr/^\s+source\s+(\S+)/,
+    'taxon'   => qr/^\s+\/db_xref="taxon:(\d+)"/,
+    'gene'    => qr/^\s+\/gene="(\S+)"/,
+    'product' => qr/^\s+\/product="(\S+)"/,
+    'gi'      => qr/^VERSION\s*.*GI:(\d+)/,
+    'gb'      => qr/^VERSION\s*(\S+)\s*/,
+};
+my $seq_pat = qr/^ORIGIN/;
+my $eof_pat = qr/^\s*\/\/\s*$/;
+
+my @header_tags = ('locus', 'gi', 'gb', 'gene', 'taxon');
+
+my @seq = ();
+my %tags = ();
+my $in_seq = 0;
+while(<$fh>){
+    if(/$eof_pat/){
+        my @header_elements = ();
+        for my $tag (@header_tags){
+            push @header_elements, ($tag, $tags{$tag}); 
+        }
+        print '>', join('|', @header_elements), "\n";
+        print join("\n", @seq), "\n";
+        $in_seq = 0;
+        @seq = ();
+        %tags = ();
+    }
+    elsif(/$seq_pat/){
+        $in_seq = 1;
+    }
+    elsif($in_seq){
+        my $line = $_;
+        $line =~ s/\s//g;
+        $line =~ s/\d//g;
+        $line =~ tr/[a-z]/[A-Z]/;
+        push @seq, $line;
+    }
+    else{
+        foreach my $tag (@header_tags){
+            if(/$patterns->{$tag}/){
+                $tags{$tag} = $1; 
+            }
+        }
+    }
+}

@@ -1,0 +1,254 @@
+#! /usr/bin/perl
+
+=head1 NAME
+
+b<gbk2fasta> - extracts sequences from a genbank file
+
+=head1 SYNOPSIS
+
+[gbk file] | gbk2fasta [option] > out.fasta
+
+=head1 OPTIONS
+
+B<--file [string]>
+
+Print only the sequences of the loci in this file
+
+Choose one of the following options.
+
+B<--seq>
+    Prints the main sequence the genbank file describes
+
+B<--protein>
+    Prints the translated coding regions
+
+B<--gene>
+    Prints fully each gene
+
+B<--mRNA>
+    Prints the mRNAs
+
+B<--ncRNA>
+    Prints the non-coding RNAs
+
+B<--cds>
+    Prints the coding sequences
+
+=cut
+
+use strict;
+use warnings;
+use Bio::SeqIO;
+use Getopt::Long;
+sub CL { return 60 }
+
+my $code = \&seq;
+
+my $file;
+my $prot_gbk = 0;
+Getopt::Long::Configure ('bundling');
+my $result = GetOptions(
+    'f|file=s'  => \$file,
+
+    's|seq'      => sub { $code = \&seq },
+    'p|protein'  => sub { $code = \&protein},
+    'g|gene'     => sub { $code = \&gene},
+    'm|mRNA'     => sub { $code = \&mRNA},
+    'n|ncRNA'    => sub { $code = \&ncRNA},
+    'c|cds'      => sub { $code = \&cds},
+);
+die "Failed to parse command line options\n" unless $result;
+
+my $fh = \*STDIN;
+my $in = Bio::SeqIO -> new(-fh => $fh, -format => 'genbank');
+
+my $organism;
+my $taxon;
+my $desc;
+
+my %loci;
+if($file){
+    open LOCI, "<$file";
+    while(<LOCI>){
+        if(/(\S+)/){
+            $loci{$1} = 1;
+        }
+    }
+}
+
+while(my $seq_obj = $in->next_seq()){
+    $desc = $seq_obj->desc();
+    foreach my $feat ($seq_obj->get_SeqFeatures()){
+        if($feat->primary_tag() eq 'source'){
+            &_set_source($feat);
+            $code->($feat);
+            next;
+        }
+        if($file) {
+            next unless $feat->has_tag('locus_tag');
+            my $locus = ($feat->get_tag_values('locus_tag'))[0];
+            $code->($feat) if exists $loci{$locus};
+        } else {
+            $code->($feat);
+        }
+    }
+}
+
+sub _set_source {
+    my $feat = shift;
+    $organism = &get_simple_tag($feat, 'organism');
+    $taxon = &get_db_xref($feat, 'taxon');
+}
+
+sub seq {
+    my $feat = shift;
+    return unless $feat->primary_tag() eq 'source'; 
+    print &_seq_header($feat) . "\n";
+    print &columnify( $feat->seq()->seq() );
+}
+
+sub gene {
+    my $feat = shift;
+    return unless $feat->primary_tag() eq 'gene'; 
+    print &_gene_header($feat) . "\n";
+    print &columnify( $feat->seq()->seq() );
+}
+
+sub cds {
+    my $feat = shift;
+    return unless $feat->primary_tag() eq 'CDS'; 
+    print &_cds_header($feat) . "\n";
+    print &columnify( $feat->spliced_seq()->seq() );
+}
+
+
+sub protein {
+    my $feat = shift;
+    return unless $feat->primary_tag() eq 'CDS'; 
+    print &_protein_header($feat) . "\n";
+    print &columnify( &get_simple_tag($feat, 'translation') );
+}
+
+
+sub mRNA {
+    my $feat = shift;
+    return unless $feat->primary_tag() eq 'mRNA'; 
+    print &_mRNA_header($feat) . "\n";
+    print &columnify( $feat->seq()->seq() );
+}
+
+
+sub ncRNA {
+    my $feat = shift;
+    return unless $feat->primary_tag() eq 'ncRNA'; 
+    print &_ncRNA_header($feat) . "\n";
+    print &columnify( $feat->seq()->seq() );
+}
+
+sub _seq_header {
+    my $feat = shift;
+    my $header = ">" . $desc;
+    return $header;
+}
+
+sub _ncRNA_header {
+    my $feat = shift;
+    my $header = &_base_header($feat);
+    my ($ncRNA_class, $product) = map &get_simple_tag($feat, $_),
+                                  ('ncRNA_class', 'product');
+    $header .= "ncRNA_class|$ncRNA_class $product";
+    return $header;
+}
+
+sub _gene_header {
+    my $feat = shift;
+    my $header = &_base_header($feat);
+    my $gene = &get_simple_tag($feat, 'gene');
+    my $gene_id = &get_db_xref($feat, 'GeneID');
+    $header .= "gene|$gene|GeneID|$gene_id";
+    if($feat->has_tag('pseudo')){
+        $header .= "|pseudo";
+    }
+    return $header;
+}
+
+sub _protein_header {
+    my $feat = shift;
+    my $header = &_base_header($feat);
+    my ($protein_id, $product) = 
+                         map &get_simple_tag($feat, $_),
+                         ('protein_id',	'product');
+    my $gi = &get_db_xref($feat, 'GI');
+    $header .= "gi|$gi|gb|$protein_id";
+    return $header;
+}
+
+sub _cds_header {
+    my $feat = shift;
+    my $codon_start = &get_simple_tag($feat, 'codon_start');
+    my $header = &_protein_header($feat) . "|codon_start|$codon_start";
+    return $header;
+}
+
+sub _mRNA_header {
+    my $feat = shift;
+    my $header = &_base_header($feat);
+    my ($product, $transcript_id) = map &get_simple_tag($feat, $_),
+                                    ('product', 'transcript_id');
+    $header .= "transcript_id|$transcript_id";
+    return $header;
+}
+
+sub _base_header {
+    my $feat = shift;
+
+    # Some of this information is not currently used, but could be added 
+    # to header if desired
+    my ($locus_tag, $gene) = map &get_simple_tag($feat, $_), 
+                                 ('locus_tag', 'gene');
+    # my $gene_id = &get_db_xref($feat, 'GeneID');
+
+    my $header = ">locus|$locus_tag|taxon|$taxon|gene|$gene|";
+    return $header;
+}
+
+sub _add_location {
+    my $feat = shift;
+    return "|location:" . $feat->location()->to_FTstring();
+}
+
+sub get_simple_tag {
+    my($feat, $tag) = @_;
+    if($feat->has_tag($tag)){
+        return ($feat->get_tag_values($tag))[0];
+    } else {
+        return "NA";
+    }
+}
+
+sub get_db_xref {
+    my ($feat, $type) = @_;
+    if($feat->has_tag('db_xref')){
+        foreach my $ref ($feat->get_tag_values('db_xref')){
+            if($ref =~ m/(\S+?):(\S+)/){
+                return $2 if $1 eq $type;
+            }
+        }
+    }
+    return "NA";
+}
+
+# Breaks a string into a column with equal length lines
+sub columnify {
+    my $string = shift;
+    my $out = "";
+    for(my $i = 0; $i * &CL() < length $string; $i++){
+        if(($i + 1) * &CL() < length $string){
+            $out .= substr($string, $i * &CL(), &CL()) . "\n"; 
+        }
+        else {
+            $out .= substr($string, $i * &CL(), length $string) . "\n";
+        }
+    }
+    return $out;
+}
